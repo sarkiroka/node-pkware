@@ -239,6 +239,7 @@ fn find_repetition(
     (0, 0)
 }
 
+/// JS: false = literal, true vagy null = repetíció
 fn is_repetition_flushable(size: usize, distance: u32, remaining: usize) -> bool {
     if size == 0 {
         return false;
@@ -249,7 +250,8 @@ fn is_repetition_flushable(size: usize, distance: u32, remaining: usize) -> bool
     if size >= 8 || remaining < 2 {
         return true;
     }
-    false
+    // size 3-7, remaining >= 2: JS null, repetíciót ír
+    true
 }
 
 fn output_bits(
@@ -289,12 +291,12 @@ fn output_bits_inner(
     if *out_bits > 8 {
         *out_bits &= 7;
         let shifted = bit_buffer >> (8 - old_out_bits);
-        output.push((shifted & mask8) as u8);
+        output[*out_size] = (shifted & mask8) as u8;
         *out_size += 1;
     } else {
         *out_bits &= 7;
         if *out_bits == 0 {
-            output.push(0);
+            output[*out_size] = 0;
             *out_size += 1;
         }
     }
