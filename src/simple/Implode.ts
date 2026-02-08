@@ -21,13 +21,11 @@ const SIZE_OF_HEADER = 3
  */
 const MAX_SIZE_OF_TERMINATION_LITERAL = 2
 
-function getSizeOfMatching(inputBytes: ArrayBufferLike, a: number, b: number): number {
-  const limit = clamp(b - a, 2, LONGEST_ALLOWED_REPETITION)
-
-  const view = new Uint8Array(inputBytes)
+function getSizeOfMatching(view: Uint8Array, indexA: number, indexB: number): number {
+  const limit = clamp(indexB - indexA, 2, LONGEST_ALLOWED_REPETITION)
 
   for (let i = 2; i <= limit; i++) {
-    if (view[a + i] !== view[b + i]) {
+    if (view[indexA + i] !== view[indexB + i]) {
       return i
     }
   }
@@ -35,64 +33,31 @@ function getSizeOfMatching(inputBytes: ArrayBufferLike, a: number, b: number): n
   return limit
 }
 
-/**
- * Returns the index of first occurance where needle matches haystack.
- * If that never happens or either needle or haystack is empty, then -1 is returned.
- */
-function matchesAt(needle: ArrayBufferLike, haystack: ArrayBufferLike): number {
-  if (needle.byteLength === 0 || haystack.byteLength === 0) {
-    return -1
-  }
+const HASH_TABLE_SIZE = 65536
 
-  const needleView = new Uint8Array(needle)
-  const haystackView = new Uint8Array(haystack)
-
-  for (let i = 0; i < haystack.byteLength - needle.byteLength; i++) {
-    let matches = true
-    for (let j = 0; j < needle.byteLength; j++) {
-      if (haystackView[i + j] !== needleView[j]) {
-        matches = false
-        break
-      }
-    }
-
-    if (matches) {
-      return i
-    }
-  }
-
-  return -1
-}
-
-/**
- * TODO: make sure that we find the most recent one,
- * which in turn allows us to store backward length in less amount of bits
- * currently the code goes from the furthest point
- */
-function findRepetitions(
-  inputBytes: ArrayBufferLike,
-  endOfLastMatch: number,
+function findRepetitionWithHash(
+  view: Uint8Array,
+  hashTable: Int32Array,
   cursor: number,
 ): { size: number; distance: number } {
-  const notEnoughBytes = inputBytes.byteLength - cursor < 2
-  const tooClose = cursor === endOfLastMatch || cursor - endOfLastMatch < 2
-  if (notEnoughBytes || tooClose) {
+  const viewLength = view.length
+  if (viewLength - cursor < 2) {
     return { size: 0, distance: 0 }
   }
 
-  const haystack = inputBytes.slice(endOfLastMatch, cursor)
-  const needle = inputBytes.slice(cursor, cursor + 2)
+  const hash = (view[cursor] << 8) | view[cursor + 1]
+  const matchPosition = hashTable[hash]
+  if (matchPosition < 0) {
+    hashTable[hash] = cursor
+  }
 
-  const matchIndex = matchesAt(needle, haystack)
-  if (matchIndex !== -1) {
-    const distance = cursor - endOfLastMatch - matchIndex
-
+  if (matchPosition >= 0 && cursor - matchPosition >= 2) {
     let size = 2
-    if (distance > 2) {
-      size = getSizeOfMatching(inputBytes, endOfLastMatch + matchIndex, cursor)
+    if (cursor - matchPosition > 2) {
+      size = getSizeOfMatching(view, matchPosition, cursor)
     }
-
-    return { distance: distance - 1, size }
+    const distanceBytes = cursor - matchPosition
+    return { distance: distanceBytes - 1, size }
   }
 
   return { size: 0, distance: 0 }
@@ -239,18 +204,18 @@ export class Implode {
 
     this.skipFirstTwoBytes()
 
-    // -------------------------------
-    // work in progress
+    const hashTable = new Int32Array(HASH_TABLE_SIZE)
+    hashTable.fill(-1)
 
-    const endOfLastMatch = 0 // used when searching for longer repetitions later
+    let view = this.inputBufferView
+    hashTable[(view[0] << 8) | view[1]] = 0
+    if (view.length > 2) {
+      hashTable[(view[1] << 8) | view[2]] = 1
+    }
 
     while (this.inputBuffer.byteLength - this.inputBufferStartIndex > 0) {
-      let data: { size: number; distance: number }
-      if (endOfLastMatch > 0) {
-        data = findRepetitions(this.inputBuffer.slice(endOfLastMatch), endOfLastMatch, this.inputBufferStartIndex)
-      } else {
-        data = findRepetitions(this.inputBuffer, endOfLastMatch, this.inputBufferStartIndex)
-      }
+      const cursor = this.inputBufferStartIndex
+      const data = findRepetitionWithHash(view, hashTable, cursor)
 
       const { size, distance } = data
       const isFlushable = this.isRepetitionFlushable(size, distance)
@@ -316,6 +281,14 @@ export class Implode {
         this.inputBuffer = this.inputBuffer.slice(blockSize)
         this.inputBufferView = new Uint8Array(this.inputBuffer)
         this.inputBufferStartIndex = this.inputBufferStartIndex - blockSize
+        view = this.inputBufferView
+        hashTable.fill(-1)
+        if (view.length >= 2) {
+          hashTable[(view[0] << 8) | view[1]] = 0
+        }
+        if (view.length >= 3) {
+          hashTable[(view[1] << 8) | view[2]] = 1
+        }
       }
     }
   }

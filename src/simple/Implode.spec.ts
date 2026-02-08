@@ -38,7 +38,7 @@ describe('simple/Implode', () => {
     const equals = unpackedFile.equals(new Uint8Array(unpacked))
 
     expect(equals).toBe(true)
-  }).timeout(10_000) // TODO: Implode takes 5+ seconds to compress level1.llf, it needs to be improved
+  }).timeout(10_000)
 
   // it('makes the file smaller and actually compress the data, not just encode it', async () => {
   //   expect.assertions(1)
