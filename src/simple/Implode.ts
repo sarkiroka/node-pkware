@@ -340,20 +340,20 @@ export class Implode {
     }
 
     const oldOutBits = this.outBits
+    const mask8 = 0xff
 
     this.outputBufferView[this.outputBufferSize - 1] =
-      this.outputBufferView[this.outputBufferSize - 1] | getLowestNBitsOf(bitBuffer << oldOutBits, 8)
+      this.outputBufferView[this.outputBufferSize - 1] | ((bitBuffer << oldOutBits) & mask8)
 
     this.outBits = this.outBits + numberOfBits
 
     if (this.outBits > 8) {
-      this.outBits = getLowestNBitsOf(this.outBits, 3)
+      this.outBits = this.outBits & 7
       bitBuffer = bitBuffer >> (8 - oldOutBits)
-
-      this.outputBufferView[this.outputBufferSize] = getLowestNBitsOf(bitBuffer, 8)
+      this.outputBufferView[this.outputBufferSize] = bitBuffer & mask8
       this.outputBufferSize = this.outputBufferSize + 1
     } else {
-      this.outBits = getLowestNBitsOf(this.outBits, 3)
+      this.outBits = this.outBits & 7
       if (this.outBits === 0) {
         this.outputBufferView[this.outputBufferSize] = 0
         this.outputBufferSize = this.outputBufferSize + 1
