@@ -21,10 +21,40 @@ const SIZE_OF_HEADER = 3
  */
 const MAX_SIZE_OF_TERMINATION_LITERAL = 2
 
+/**
+ * SIMD-szerű: 4 bájt egyszerre összehasonlítva (Uint32) a bájt-ciklus helyett.
+ */
 function getSizeOfMatching(view: Uint8Array, indexA: number, indexB: number): number {
   const limit = clamp(indexB - indexA, 2, LONGEST_ALLOWED_REPETITION)
+  const viewLength = view.length
+  let offset = 2
 
-  for (let i = 2; i <= limit; i++) {
+  while (offset + 4 <= limit && indexB + offset + 4 <= viewLength) {
+    const base = offset
+    const wordA =
+      view[indexA + base] |
+      (view[indexA + base + 1] << 8) |
+      (view[indexA + base + 2] << 16) |
+      (view[indexA + base + 3] << 24)
+    const wordB =
+      view[indexB + base] |
+      (view[indexB + base + 1] << 8) |
+      (view[indexB + base + 2] << 16) |
+      (view[indexB + base + 3] << 24)
+    if (wordA !== wordB) {
+      for (let i = 0; i < 4; i++) {
+        if (view[indexA + base + i] !== view[indexB + base + i]) {
+          return base + i
+        }
+      }
+    }
+    offset = offset + 4
+  }
+
+  for (let i = offset; i <= limit; i++) {
+    if (indexB + i >= viewLength) {
+      return i - 1
+    }
     if (view[indexA + i] !== view[indexB + i]) {
       return i
     }
@@ -38,6 +68,8 @@ const HASH_TABLE_SIZE = 65536
 function findRepetitionWithHash(
   view: Uint8Array,
   hashTable: Int32Array,
+  hashTableGeneration: Uint32Array,
+  currentGeneration: number,
   cursor: number,
 ): { size: number; distance: number } {
   const viewLength = view.length
@@ -46,9 +78,10 @@ function findRepetitionWithHash(
   }
 
   const hash = (view[cursor] << 8) | view[cursor + 1]
-  const matchPosition = hashTable[hash]
+  const matchPosition = hashTableGeneration[hash] === currentGeneration ? hashTable[hash] : -1
   if (matchPosition < 0) {
     hashTable[hash] = cursor
+    hashTableGeneration[hash] = currentGeneration
   }
 
   if (matchPosition >= 0 && cursor - matchPosition >= 2) {
@@ -64,7 +97,8 @@ function findRepetitionWithHash(
 }
 
 export class Implode {
-  private inputBuffer: ArrayBufferLike
+  private readonly fullInputBuffer: ArrayBufferLike
+  private inputWindowStart: number
   private inputBufferView: Uint8Array
   private inputBufferStartIndex: number
 
@@ -89,8 +123,9 @@ export class Implode {
 
     this.setupTables(compressionType, dictionarySize)
 
-    this.inputBuffer = input
-    this.inputBufferView = new Uint8Array(this.inputBuffer)
+    this.fullInputBuffer = input
+    this.inputWindowStart = 0
+    this.inputBufferView = new Uint8Array(this.fullInputBuffer, 0, this.fullInputBuffer.byteLength)
     this.inputBufferStartIndex = 0
 
     this.outputBuffer = new ArrayBuffer(input.byteLength + SIZE_OF_HEADER + MAX_SIZE_OF_TERMINATION_LITERAL)
@@ -193,11 +228,11 @@ export class Implode {
   }
 
   private processInput(dictionarySize: DictionarySize): void {
-    if (this.inputBuffer.byteLength === 0) {
+    if (this.inputBufferView.length === 0) {
       return
     }
 
-    if (this.inputBuffer.byteLength <= 2) {
+    if (this.inputBufferView.length <= 2) {
       this.skipFirstTwoBytes()
       return
     }
@@ -205,17 +240,20 @@ export class Implode {
     this.skipFirstTwoBytes()
 
     const hashTable = new Int32Array(HASH_TABLE_SIZE)
-    hashTable.fill(-1)
+    const hashTableGeneration = new Uint32Array(HASH_TABLE_SIZE)
+    let currentGeneration = 1
 
     let view = this.inputBufferView
     hashTable[(view[0] << 8) | view[1]] = 0
+    hashTableGeneration[(view[0] << 8) | view[1]] = currentGeneration
     if (view.length > 2) {
       hashTable[(view[1] << 8) | view[2]] = 1
+      hashTableGeneration[(view[1] << 8) | view[2]] = currentGeneration
     }
 
-    while (this.inputBuffer.byteLength - this.inputBufferStartIndex > 0) {
+    while (this.inputBufferView.length - this.inputBufferStartIndex > 0) {
       const cursor = this.inputBufferStartIndex
-      const data = findRepetitionWithHash(view, hashTable, cursor)
+      const data = findRepetitionWithHash(view, hashTable, hashTableGeneration, currentGeneration, cursor)
 
       const { size, distance } = data
       const isFlushable = this.isRepetitionFlushable(size, distance)
@@ -278,16 +316,22 @@ export class Implode {
       }
 
       if (this.inputBufferStartIndex >= blockSize) {
-        this.inputBuffer = this.inputBuffer.slice(blockSize)
-        this.inputBufferView = new Uint8Array(this.inputBuffer)
+        this.inputWindowStart = this.inputWindowStart + blockSize
         this.inputBufferStartIndex = this.inputBufferStartIndex - blockSize
+        const remainingLength = this.fullInputBuffer.byteLength - this.inputWindowStart
+        this.inputBufferView = new Uint8Array(this.fullInputBuffer, this.inputWindowStart, remainingLength)
         view = this.inputBufferView
-        hashTable.fill(-1)
+        currentGeneration = currentGeneration + 1
+        if (currentGeneration === 0) {
+          currentGeneration = 1
+        }
         if (view.length >= 2) {
           hashTable[(view[0] << 8) | view[1]] = 0
+          hashTableGeneration[(view[0] << 8) | view[1]] = currentGeneration
         }
         if (view.length >= 3) {
           hashTable[(view[1] << 8) | view[2]] = 1
+          hashTableGeneration[(view[1] << 8) | view[2]] = currentGeneration
         }
       }
     }
@@ -314,7 +358,7 @@ export class Implode {
       return false
     }
 
-    if (size >= 8 || this.inputBuffer.byteLength - this.inputBufferStartIndex < 2) {
+    if (size >= 8 || this.inputBufferView.length - this.inputBufferStartIndex < 2) {
       return true
     }
 
