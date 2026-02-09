@@ -2,5 +2,4 @@ node_modules
 report.*
 tsconfig.tsbuildinfo
 dist
-wasm/target
 latest_hash_of_package_json

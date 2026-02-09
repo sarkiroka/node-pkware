@@ -10,7 +10,6 @@ import {
 } from '@src/constants.js'
 import { clamp, getLowestNBitsOf, repeat, nBitsOfOnes } from '@src/functions.js'
 import type { CompressionType, DictionarySize } from '@src/simple/types.js'
-import { implodeBinaryLargeWasm } from '@src/simple/implode-wasm.js'
 
 /**
  * in bytes
@@ -81,35 +80,6 @@ export class Implode {
   private readonly nChCodes: number[]
 
   constructor(input: ArrayBufferLike, compressionType: CompressionType, dictionarySize: DictionarySize) {
-    let wasmResult: ArrayBuffer | null = null
-    if (
-      compressionType === 'binary' &&
-      dictionarySize === 'large' &&
-      process.env.IMPLODE_USE_WASM === '1'
-    ) {
-      try {
-        wasmResult = implodeBinaryLargeWasm(input)
-      } catch {
-        wasmResult = null
-      }
-    }
-
-    if (wasmResult !== null) {
-      this.dictionarySizeMask = 0
-      this.distCodes = structuredClone(DistCode)
-      this.distBits = structuredClone(DistBits)
-      this.outBits = 0
-      this.nChBits = repeat(0, 0x3_06)
-      this.nChCodes = repeat(0, 0x3_06)
-      this.inputBuffer = input
-      this.inputBufferView = new Uint8Array(this.inputBuffer)
-      this.inputBufferStartIndex = 0
-      this.outputBuffer = wasmResult
-      this.outputBufferView = new Uint8Array(this.outputBuffer)
-      this.outputBufferSize = wasmResult.byteLength
-      return
-    }
-
     this.dictionarySizeMask = 0
     this.distCodes = structuredClone(DistCode)
     this.distBits = structuredClone(DistBits)
